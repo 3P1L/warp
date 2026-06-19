@@ -24,6 +24,7 @@ namespace Warp
         static int Port = 0;
 
         static Image GainRef = null;
+        static bool GainRefIsGainFile = false;
         static DefectModel DefectMap = null;
         static int2 HeaderlessDims = new int2(2);
         static long HeaderlessOffset = 0;
@@ -71,6 +72,7 @@ namespace Warp
                 {
                     GainRef?.Dispose();
                     DefectMap?.Dispose();
+                    GainRefIsGainFile = false;
 
                     string GainPath = (string)Command.Content[0];
                     bool FlipX = (bool)Command.Content[1];
@@ -80,6 +82,7 @@ namespace Warp
 
                     if (!string.IsNullOrEmpty(GainPath))
                     {
+                        GainRefIsGainFile = Helper.PathToExtension(GainPath).Equals(".gain", StringComparison.OrdinalIgnoreCase);
                         GainRef = LoadAndPrepareGainReference(GainPath, FlipX, FlipY, Transpose);
                     }
                     if (!string.IsNullOrEmpty(DefectsPath))
@@ -771,8 +774,11 @@ namespace Warp
                                                (int)HeaderlessOffset,
                                                ImageFormatsHelper.StringToType(HeaderlessType));
 
-            float Mean = MathHelper.Mean(Gain.GetHost(Intent.Read)[0]);
-            Gain.TransformValues(v => v == 0 ? 1 : v / Mean);
+            if (!Helper.PathToExtension(path).Equals(".gain", StringComparison.OrdinalIgnoreCase))
+            {
+                float Mean = MathHelper.Mean(Gain.GetHost(Intent.Read)[0]);
+                Gain.TransformValues(v => v == 0 ? 1 : v / Mean);
+            }
 
             if (flipX)
                 Gain = Gain.AsFlippedX();
@@ -854,7 +860,7 @@ namespace Warp
 
             int2 SourceDims = new int2(header.Dimensions);
             if (IsEER)
-                SourceDims *= 4;
+                SourceDims = GainRef != null && correctGain && GainRefIsGainFile ? new int2(GainRef.Dims) : SourceDims * 4;
 
             if (IsEER && GainRef != null && correctGain)
             {
@@ -914,10 +920,7 @@ namespace Warp
 
                         if (GainRef != null && correctGain)
                         {
-                            //if (IsEER)
-                            //    GPULayers[GPUThreadID].DivideSlices(GainRef);
-                            //else
-                            GPULayers[GPUThreadID].MultiplySlices(GainRef); // EER .gain is now multiplicative??
+                            GPULayers[GPUThreadID].MultiplySlices(GainRef);
                         }
 
                         if (DefectMap != null)
@@ -971,7 +974,7 @@ namespace Warp
                     if (IsTiff)
                         TiffNative.ReadTIFFPatient(10, 500, path, z, true, RawLayers[threadID]);
                     else if (IsEER)
-                        EERNative.ReadEERPatient(10, 500, path, z * EERGroupFrames, Math.Min(((HeaderEER)header).DimensionsUngrouped.Z, (z + 1) * EERGroupFrames), 3, RawLayers[threadID]);
+                        EERNative.ReadEERPatient(10, 500, path, z * EERGroupFrames, Math.Min(((HeaderEER)header).DimensionsUngrouped.Z, (z + 1) * EERGroupFrames), GainRef != null && correctGain && GainRefIsGainFile ? EERSupersample : 3, RawLayers[threadID]);
                     else
                         IOHelper.ReadMapFloatPatient(10, 500,
                                                      path,
@@ -990,10 +993,7 @@ namespace Warp
 
                         if (GainRef != null && correctGain)
                         {
-                            //if (IsEER)
-                            //    GPULayers[GPUThreadID].DivideSlices(GainRef);
-                            //else
-                            if (!IsEER)
+                            if (!IsEER || GainRefIsGainFile)
                                 GPULayers[GPUThreadID].MultiplySlices(GainRef);
                         }
 

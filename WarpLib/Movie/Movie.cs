@@ -2064,6 +2064,9 @@ namespace Warp
             string Extension = Helper.PathToExtension(DataPath).ToLower();
             bool IsTiff = Header.GetType() == typeof(HeaderTiff);
             bool IsEER = Header.GetType() == typeof(HeaderEER);
+            bool IsGainFile = imageGain != null &&
+                              !string.IsNullOrEmpty(options.GainPath) &&
+                              Helper.PathToExtension(options.GainPath).Equals(".gain", StringComparison.OrdinalIgnoreCase);
 
             if (imageGain != null)
                 if (!IsEER)
@@ -2152,7 +2155,7 @@ namespace Warp
 
                         if (imageGain != null)
                         {
-                            if (IsEER)
+                            if (IsEER && !IsGainFile)
                                 GPULayers[GPUThreadID].DivideSlices(imageGain);
                             else
                                 GPULayers[GPUThreadID].MultiplySlices(imageGain);
@@ -2203,7 +2206,7 @@ namespace Warp
 
                         if (imageGain != null)
                         {
-                            if (IsEER)
+                            if (IsEER && !IsGainFile)
                                 GPULayers[GPUThreadID].DivideSlices(imageGain);
                             else
                                 GPULayers[GPUThreadID].MultiplySlices(imageGain);

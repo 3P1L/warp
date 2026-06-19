@@ -1120,8 +1120,11 @@ namespace WarpWorker
                                                (int)HeaderlessOffset,
                                                ImageFormatsHelper.StringToType(HeaderlessType));
 
-            float Mean = MathHelper.Mean(Gain.GetHost(Intent.Read)[0]);
-            Gain.TransformValues(v => v == 0 ? 1 : v / Mean);
+            if (!Helper.PathToExtension(path).Equals(".gain", StringComparison.OrdinalIgnoreCase))
+            {
+                float Mean = MathHelper.Mean(Gain.GetHost(Intent.Read)[0]);
+                Gain.TransformValues(v => v == 0 ? 1 : v / Mean);
+            }
 
             if (flipX)
                 Gain = Gain.AsFlippedX();

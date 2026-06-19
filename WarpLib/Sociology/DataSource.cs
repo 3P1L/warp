@@ -428,8 +428,11 @@ namespace Warp.Sociology
 
             Image Gain = Image.FromFile(GainPath, new int2(1), 0, typeof(float));
 
-            float Mean = MathHelper.Mean(Gain.GetHost(Intent.Read)[0]);
-            Gain.TransformValues(v => v == 0 ? 1 : v / Mean);
+            if (!Helper.PathToExtension(GainPath).Equals(".gain", StringComparison.OrdinalIgnoreCase))
+            {
+                float Mean = MathHelper.Mean(Gain.GetHost(Intent.Read)[0]);
+                Gain.TransformValues(v => v == 0 ? 1 : v / Mean);
+            }
 
             if (GainFlipX)
                 Gain = Gain.AsFlippedX();

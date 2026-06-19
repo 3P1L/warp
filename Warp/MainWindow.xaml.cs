@@ -3220,10 +3220,13 @@ namespace Warp
                                                (int)Options.Import.HeaderlessOffset,
                                                ImageFormatsHelper.StringToType(Options.Import.HeaderlessType));
 
-            float Mean = MathHelper.Mean(Gain.GetHost(Intent.Read)[0]);
-            if (Mean == 0)
-                Mean = 1;
-            Gain.TransformValues(v => v == 0 ? 1 : v / Mean);
+            if (!Helper.PathToExtension(Options.Import.GainPath).Equals(".gain", StringComparison.OrdinalIgnoreCase))
+            {
+                float Mean = MathHelper.Mean(Gain.GetHost(Intent.Read)[0]);
+                if (Mean == 0)
+                    Mean = 1;
+                Gain.TransformValues(v => v == 0 ? 1 : v / Mean);
+            }
 
             if (Options.Import.GainFlipX)
                 Gain = Gain.AsFlippedX();
@@ -3273,6 +3276,9 @@ namespace Warp
             string Extension = Helper.PathToExtension(path).ToLower();
             bool IsTiff = header.GetType() == typeof(HeaderTiff);
             bool IsEER = header.GetType() == typeof(HeaderEER);
+            bool IsGainFile = imageGain != null &&
+                              !string.IsNullOrEmpty(Options.Import.GainPath) &&
+                              Helper.PathToExtension(Options.Import.GainPath).Equals(".gain", StringComparison.OrdinalIgnoreCase);
 
             if (imageGain != null)
                 if (!IsEER)
@@ -3358,7 +3364,7 @@ namespace Warp
                         {
                             if (imageGain != null)
                             {
-                                if (IsEER)
+                                if (IsEER && !IsGainFile)
                                     Layer.DivideSlices(imageGain);
                                 else
                                     Layer.MultiplySlices(imageGain);
@@ -3416,7 +3422,7 @@ namespace Warp
                         {
                             if (imageGain != null)
                             {
-                                if (IsEER)
+                                if (IsEER && !IsGainFile)
                                     Layer.DivideSlices(imageGain);
                                 else
                                     Layer.MultiplySlices(imageGain);
