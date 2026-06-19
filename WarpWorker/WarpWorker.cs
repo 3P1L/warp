@@ -33,6 +33,7 @@ namespace WarpWorker
         static bool Terminating = false;
 
         static Image GainRef = null;
+        static bool GainRefIsGainFile = false;
         static DefectModel DefectMap = null;
         static int2 HeaderlessDims = new int2(2);
         static long HeaderlessOffset = 0;
@@ -211,6 +212,7 @@ namespace WarpWorker
                 {
                     GainRef?.Dispose();
                     DefectMap?.Dispose();
+                    GainRefIsGainFile = false;
 
                     string GainPath = (string)Command.Content[0];
                     bool FlipX = (bool)Command.Content[1];
@@ -220,6 +222,7 @@ namespace WarpWorker
 
                     if (!string.IsNullOrEmpty(GainPath))
                     {
+                        GainRefIsGainFile = Helper.PathToExtension(GainPath).Equals(".gain", StringComparison.OrdinalIgnoreCase);
                         GainRef = LoadAndPrepareGainReference(GainPath, FlipX, FlipY, Transpose);
                     }
                     if (!string.IsNullOrEmpty(DefectsPath))
@@ -1180,6 +1183,18 @@ namespace WarpWorker
                     if (header.Dimensions.X != GainRef.Dims.X || header.Dimensions.Y != GainRef.Dims.Y)
                         throw new Exception($"Gain reference dimensions ({GainRef.Dims.X}x{GainRef.Dims.Y}) do not match image ({header.Dimensions.X}x{header.Dimensions.Y}).");
 
+            int EERSupersample = 3;
+            if (GainRef != null && correctGain && IsEER && GainRefIsGainFile)
+            {
+                if (header.Dimensions.X == GainRef.Dims.X)
+                    EERSupersample = 1;
+                else if (header.Dimensions.X * 2 == GainRef.Dims.X)
+                    EERSupersample = 2;
+                else if (header.Dimensions.X * 4 == GainRef.Dims.X)
+                    EERSupersample = 3;
+                else
+                    throw new Exception("Invalid supersampling factor requested for EER based on gain reference dimensions");
+            }
             int EERGroupFrames = 1;
             if (IsEER)
             {
@@ -1198,13 +1213,21 @@ namespace WarpWorker
 
             int2 SourceDims = new int2(header.Dimensions);
             if (IsEER)
-            { 
-                SourceDims *= 4;
+            {
+                if (GainRef != null && correctGain && GainRefIsGainFile)
+                    SourceDims = new int2(GainRef.Dims);
+                else
+                {
+                    SourceDims *= 4;
+                    if (GainRef != null && correctGain && new int2(GainRef.Dims) != SourceDims)
+                        GainRef = GainRef.AsScaled(SourceDims).AndDisposeParent();
+                }
+            }
 
-                if (GainRef != null && 
-                    correctGain && 
-                    new int2(GainRef.Dims) != SourceDims)
-                    GainRef = GainRef.AsScaled(SourceDims).AndDisposeParent();
+            if (IsEER && GainRef != null && correctGain && GainRefIsGainFile)
+            {
+                header.Dimensions.X = GainRef.Dims.X;
+                header.Dimensions.Y = GainRef.Dims.Y;
             }
 
             int NThreads = (IsTiff || IsEER) ? maxThreads : 1;
@@ -1315,7 +1338,7 @@ namespace WarpWorker
                         EERNative.ReadEERPatient(10, 500, path, z * EERGroupFrames, 
                                                  Math.Min(((HeaderEER)header).DimensionsUngrouped.Z,
                                                           (z + 1) * EERGroupFrames), 
-                                                 3, // 3 = 4x super-resolution
+                                                 EERSupersample,
                                                  RawLayers[threadID]);
                     else
                         IOHelper.ReadMapFloatPatient(10, 500,
@@ -1383,7 +1406,64 @@ namespace WarpWorker
                 foreach (var layer in GPULayers2)
                     layer.Dispose();
 
+            if (IsEER)
+                DetectAndCorrectHotPixels(stack);
+
             return stack;
+        }
+
+        static void DetectAndCorrectHotPixels(Image stack)
+        {
+            if (stack == null || stack.Dims.Z <= 0)
+                return;
+
+            int sliceElements = stack.Dims.X * stack.Dims.Y;
+            float[] sum = new float[sliceElements];
+            float[][] stackData = stack.GetHost(Intent.Read);
+
+            for (int z = 0; z < stack.Dims.Z; z++)
+            {
+                float[] frame = stackData[z];
+                for (int i = 0; i < sliceElements; i++)
+                    sum[i] += frame[i];
+            }
+
+            double total = 0;
+            double totalSquared = 0;
+            for (int i = 0; i < sliceElements; i++)
+            {
+                double value = sum[i];
+                total += value;
+                totalSquared += value * value;
+            }
+
+            double mean = total / sliceElements;
+            double variance = Math.Max(0, totalSquared / sliceElements - mean * mean);
+            double std = Math.Sqrt(variance);
+            double threshold = mean + Math.Max(6.0 * std, 10.0);
+
+            float[] hotMap = new float[sliceElements];
+            int hotPixels = 0;
+            for (int i = 0; i < sliceElements; i++)
+            {
+                if (sum[i] <= threshold)
+                    continue;
+
+                hotMap[i] = 1;
+                hotPixels++;
+            }
+
+            Console.WriteLine($"Detected {hotPixels} EER hot pixels with threshold {threshold:F2} (mean {mean:F2}, std {std:F2}).");
+            if (hotPixels == 0)
+                return;
+
+            using (Image defectImage = new Image(hotMap, new int3(stack.Dims.X, stack.Dims.Y, 1)))
+            using (DefectModel hotPixelModel = new DefectModel(defectImage, 4))
+            {
+                Image stackCopy = stack.GetCopyGPU();
+                hotPixelModel.Correct(stackCopy, stack);
+                stackCopy.Dispose();
+            }
         }
 
         #endregion

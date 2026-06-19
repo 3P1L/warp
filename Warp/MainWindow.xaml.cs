@@ -3454,6 +3454,63 @@ namespace Warp
             {
                 stack = null;
             }
+
+            if (IsEER)
+                DetectAndCorrectHotPixels(stack);
+        }
+
+        static void DetectAndCorrectHotPixels(Image stack)
+        {
+            if (stack == null || stack.Dims.Z <= 0)
+                return;
+
+            int sliceElements = stack.Dims.X * stack.Dims.Y;
+            float[] sum = new float[sliceElements];
+            float[][] stackData = stack.GetHost(Intent.Read);
+
+            for (int z = 0; z < stack.Dims.Z; z++)
+            {
+                float[] frame = stackData[z];
+                for (int i = 0; i < sliceElements; i++)
+                    sum[i] += frame[i];
+            }
+
+            double total = 0;
+            double totalSquared = 0;
+            for (int i = 0; i < sliceElements; i++)
+            {
+                double value = sum[i];
+                total += value;
+                totalSquared += value * value;
+            }
+
+            double mean = total / sliceElements;
+            double variance = Math.Max(0, totalSquared / sliceElements - mean * mean);
+            double std = Math.Sqrt(variance);
+            double threshold = mean + Math.Max(6.0 * std, 10.0);
+
+            float[] hotMap = new float[sliceElements];
+            int hotPixels = 0;
+            for (int i = 0; i < sliceElements; i++)
+            {
+                if (sum[i] <= threshold)
+                    continue;
+
+                hotMap[i] = 1;
+                hotPixels++;
+            }
+
+            Console.WriteLine($"Detected {hotPixels} EER hot pixels with threshold {threshold:F2} (mean {mean:F2}, std {std:F2}).");
+            if (hotPixels == 0)
+                return;
+
+            using (Image defectImage = new Image(hotMap, new int3(stack.Dims.X, stack.Dims.Y, 1)))
+            using (DefectModel hotPixelModel = new DefectModel(defectImage, 4))
+            {
+                Image stackCopy = stack.GetCopyGPU();
+                hotPixelModel.Correct(stackCopy, stack);
+                stackCopy.Dispose();
+            }
         }
 
         public List<int> GetDeviceList()

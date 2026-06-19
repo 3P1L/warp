@@ -2244,7 +2244,66 @@ namespace Warp
             foreach (var item in GPULayers)
                 item.Dispose();
 
+            if (IsEER)
+                DetectAndCorrectHotPixels(FrameData);
+
             frameData = FrameData;
+        }
+
+        static void DetectAndCorrectHotPixels(Image[] frames)
+        {
+            if (frames == null || frames.Length == 0)
+                return;
+
+            int sliceElements = frames[0].Dims.X * frames[0].Dims.Y;
+            float[] sum = new float[sliceElements];
+
+            for (int z = 0; z < frames.Length; z++)
+            {
+                float[] frame = frames[z].GetHost(Intent.Read)[0];
+                for (int i = 0; i < sliceElements; i++)
+                    sum[i] += frame[i];
+            }
+
+            double total = 0;
+            double totalSquared = 0;
+            for (int i = 0; i < sliceElements; i++)
+            {
+                double value = sum[i];
+                total += value;
+                totalSquared += value * value;
+            }
+
+            double mean = total / sliceElements;
+            double variance = Math.Max(0, totalSquared / sliceElements - mean * mean);
+            double std = Math.Sqrt(variance);
+            double threshold = mean + Math.Max(6.0 * std, 10.0);
+
+            float[] hotMap = new float[sliceElements];
+            int hotPixels = 0;
+            for (int i = 0; i < sliceElements; i++)
+            {
+                if (sum[i] <= threshold)
+                    continue;
+
+                hotMap[i] = 1;
+                hotPixels++;
+            }
+
+            Console.WriteLine($"Detected {hotPixels} EER hot pixels with threshold {threshold:F2} (mean {mean:F2}, std {std:F2}).");
+            if (hotPixels == 0)
+                return;
+
+            using (Image defectImage = new Image(hotMap, new int3(frames[0].Dims.X, frames[0].Dims.Y, 1)))
+            using (DefectModel hotPixelModel = new DefectModel(defectImage, 4))
+            {
+                foreach (Image frame in frames)
+                {
+                    Image frameCopy = frame.GetCopyGPU();
+                    hotPixelModel.Correct(frameCopy, frame);
+                    frameCopy.Dispose();
+                }
+            }
         }
 
         public void CreateThumbnail(int size, float stddevRange)
