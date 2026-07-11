@@ -198,8 +198,7 @@ namespace WarpTools.Commands
                     {
                         // AreTomo wrote the alignment files; import them orchestrator-side.
                         t.ImportAlignments(OptionsImport);
-                        if (LastIter)
-                            t.SaveMeta();
+                        t.SaveMeta();
                     });
 
                 AxisAngle = CalculateAverageAxis();
